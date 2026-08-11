@@ -194,7 +194,7 @@ class FastFishTTS:
         # In-Memory Voice Prompt Cache: { voice_id: (prompt_tokens_list, prompt_texts_list) }
         self.voice_cache: Dict[str, Tuple[List[torch.Tensor], List[str]]] = {}
 
-        logger.info("🎉 FastFishTTS Engine loaded successfully into GPU memory!")
+        logger.info("🎉 FastFishTTS Engine v3.0.0 loaded successfully into GPU memory!")
 
     def register_reference_voice(
         self,
@@ -261,7 +261,17 @@ class FastFishTTS:
         """
         Universal & Defensive VQ Token Decoder (Handles FireflyArchitecture, DAC, modded_dac & audiotools).
         """
-        # 1. Try FireflyArchitecture decode signature: decode(indices=codes, feature_lengths=feature_len)
+        # 1. Try DAC / modded_dac from_indices signature: from_indices(indices)
+        if hasattr(self.decoder, "from_indices"):
+            out = self.decoder.from_indices(codes)
+            return out[0] if isinstance(out, tuple) else out
+
+        # 2. Try DAC decode_code signature: decode_code(codes)
+        if hasattr(self.decoder, "decode_code"):
+            out = self.decoder.decode_code(codes)
+            return out[0] if isinstance(out, tuple) else out
+
+        # 3. Try FireflyArchitecture decode signature: decode(indices=codes, feature_lengths=feature_len)
         if hasattr(self.decoder, "decode"):
             try:
                 out = self.decoder.decode(indices=codes, feature_lengths=feature_len)
@@ -271,16 +281,7 @@ class FastFishTTS:
                     out = self.decoder.decode(codes, feature_len)
                     return out[0] if isinstance(out, tuple) else out
                 except TypeError:
-                    try:
-                        out = self.decoder.decode(codes)
-                        return out[0] if isinstance(out, tuple) else out
-                    except TypeError:
-                        pass
-
-        # 2. Try DAC decode_code signature: decode_code(codes)
-        if hasattr(self.decoder, "decode_code"):
-            out = self.decoder.decode_code(codes)
-            return out[0] if isinstance(out, tuple) else out
+                    pass
 
         raise TypeError(f"Decoder of type '{type(self.decoder).__name__}' has no compatible decode method for shape {codes.shape}")
 
@@ -400,7 +401,7 @@ def import_queue():
 # -----------------------------------------------------------------------------
 app = FastAPI(
     title="FastFishTTS Native Server",
-    version="2.9.0",
+    version="3.0.0",
     description="Clean, native, low-latency Fish Speech S2-Pro API Server.",
 )
 
@@ -431,7 +432,7 @@ class TTSRequestModel(BaseModel):
 @app.get("/v1/health")
 @app.post("/v1/health")
 async def health():
-    return {"status": "ok", "engine": "FastFishTTS Native v2.9.0"}
+    return {"status": "ok", "engine": "FastFishTTS Native v3.0.0"}
 
 
 @app.get("/v1/voices")
