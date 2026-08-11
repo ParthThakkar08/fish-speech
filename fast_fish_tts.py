@@ -416,13 +416,31 @@ app.add_middleware(
 tts_engine: Optional[FastFishTTS] = None
 
 
+import base64 as _base64
+import hashlib as _hashlib
+
+
+class ReferenceAudioModel(BaseModel):
+    audio: str = Field(..., description="Base64-encoded audio bytes")
+    text: str = Field("", description="Transcript of the reference audio (improves cloning quality)")
+    mime_type: str = Field("audio/wav", description="MIME type of the audio")
+
+
+class RegisterVoiceRequest(BaseModel):
+    voice_id: str = Field(..., description="Unique name for this voice (e.g. 'prakash_confident')")
+    audio: str = Field(..., description="Base64-encoded audio bytes")
+    text: str = Field("", description="Transcript of the reference audio")
+    mime_type: str = Field("audio/wav", description="MIME type of the audio")
+
+
 class TTSRequestModel(BaseModel):
-    text: str = Field(..., json_schema_extra={"example": "Fish Speech S2-Pro running with native ultra-fast streaming."})
-    reference_id: Optional[str] = Field(None, json_schema_extra={"example": "prakash"})
-    max_new_tokens: int = Field(1024, json_schema_extra={"example": 1024})
-    chunk_length: int = Field(150, json_schema_extra={"example": 150})
-    streaming: bool = Field(True, json_schema_extra={"example": True})
-    format: str = Field("wav", json_schema_extra={"example": "wav"})
+    text: str = Field(..., json_schema_extra={"example": "नमस्ते"})
+    reference_id: Optional[str] = Field(None, description="Pre-cached voice ID (from /v1/voices/register)")
+    references: Optional[List[ReferenceAudioModel]] = Field(None, description="Inline audio reference (only needed if reference_id not yet cached)")
+    max_new_tokens: int = Field(1024)
+    chunk_length: int = Field(100)
+    streaming: bool = Field(True)
+    format: str = Field("wav")
     top_p: float = Field(0.7)
     temperature: float = Field(0.7)
     repetition_penalty: float = Field(1.2)
@@ -441,10 +459,44 @@ async def list_voices():
     return {"status": "ok", "cached_voice_count": len(voices), "cached_voices": voices}
 
 
+@app.post("/v1/voices/register")
+async def register_voice(req: RegisterVoiceRequest):
+    """Upload a reference audio once → encodes & caches VQ tokens → returns voice_id for all future /v1/tts calls."""
+    if not tts_engine:
+        raise HTTPException(status_code=500, detail="TTS Engine not initialized.")
+    if req.voice_id in tts_engine.voice_cache:
+        logger.info(f"✅ Voice '{req.voice_id}' already in cache — skipping re-encode.")
+        return {"status": "already_cached", "voice_id": req.voice_id}
+    try:
+        audio_bytes = _base64.b64decode(req.audio)
+        tts_engine.register_reference_voice(req.voice_id, audio_bytes, req.text or None)
+        return {"status": "cached", "voice_id": req.voice_id}
+    except Exception as e:
+        logger.error(f"❌ Voice register error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/v1/tts")
 async def tts_endpoint(req: TTSRequestModel):
     if not tts_engine:
         raise HTTPException(status_code=500, detail="TTS Engine not initialized.")
+
+    # Auto-register inline references if reference_id is not yet in cache
+    effective_ref_id = req.reference_id
+    if req.references and (not effective_ref_id or effective_ref_id not in tts_engine.voice_cache):
+        ref = req.references[0]
+        # Auto-generate a cache key from audio hash if no reference_id given
+        if not effective_ref_id:
+            audio_bytes_preview = _base64.b64decode(ref.audio[:512] if len(ref.audio) > 512 else ref.audio)
+            effective_ref_id = "auto_" + _hashlib.sha256(audio_bytes_preview).hexdigest()[:12]
+        if effective_ref_id not in tts_engine.voice_cache:
+            try:
+                audio_bytes = _base64.b64decode(ref.audio)
+                tts_engine.register_reference_voice(effective_ref_id, audio_bytes, ref.text or None)
+                logger.info(f"⚡ Auto-cached inline reference as '{effective_ref_id}'")
+            except Exception as enc_err:
+                logger.error(f"❌ Inline reference encode failed: {enc_err}")
+                effective_ref_id = None
 
     if req.streaming:
         async def stream_gen():
@@ -458,7 +510,7 @@ async def tts_endpoint(req: TTSRequestModel):
             try:
                 for chunk in tts_engine.generate_stream(
                     text=req.text,
-                    reference_id=req.reference_id,
+                    reference_id=effective_ref_id,
                     max_new_tokens=req.max_new_tokens,
                     chunk_length=req.chunk_length,
                     top_p=req.top_p,
@@ -485,7 +537,7 @@ async def tts_endpoint(req: TTSRequestModel):
         try:
             audio_bytes = tts_engine.generate(
                 text=req.text,
-                reference_id=req.reference_id,
+                reference_id=effective_ref_id,
                 max_new_tokens=req.max_new_tokens,
                 chunk_length=req.chunk_length,
                 format=req.format,
