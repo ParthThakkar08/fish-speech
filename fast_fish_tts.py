@@ -151,26 +151,30 @@ AMPLITUDE = 32768
 # -----------------------------------------------------------------------------
 def split_text_into_sentences(text: str, max_chunk_len: int = 35) -> List[str]:
     """
-    Splits text by clause/sentence boundaries (।, ., !, ?, ,, \n) into smaller 
-    35-character chunks so EVERY chunk generates in under 1.2 seconds MAX.
+    Splits text into ~35-char chunks by sentence/clause boundaries, attaching punctuation
+    so zero dummy single-punctuation GPU passes are generated.
     """
     text_clean = text.strip()
     if len(text_clean) <= max_chunk_len:
         return [text_clean]
-    parts = re.split(r'([।.!?,,\n]+)', text_clean)
+    
+    pattern = r'[^।.!?,,\n]+[।.!?,,\n]*'
+    matches = re.findall(pattern, text_clean)
+    
     sentences = []
     curr = ""
-    for p in parts:
-        if not p:
+    for m in matches:
+        m_str = m.strip()
+        if not m_str:
             continue
-        curr += p
-        if re.search(r'[।.!?,,\n]', p) or len(curr) >= max_chunk_len:
-            cleaned = curr.strip()
-            if cleaned:
-                sentences.append(cleaned)
-            curr = ""
+        if len(curr) + len(m_str) <= max_chunk_len or not curr:
+            curr = (curr + " " + m_str).strip()
+        else:
+            sentences.append(curr)
+            curr = m_str
     if curr.strip():
         sentences.append(curr.strip())
+        
     return sentences if sentences else [text_clean]
 
 
