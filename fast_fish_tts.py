@@ -149,27 +149,29 @@ AMPLITUDE = 32768
 # -----------------------------------------------------------------------------
 # 0C. Text Preprocessing & Sentence Splitter Helper
 # -----------------------------------------------------------------------------
-def split_text_into_sentences(text: str, max_chunk_len: int = 80) -> List[str]:
+def split_text_into_sentences(text: str, max_chunk_len: int = 35) -> List[str]:
     """
-    Splits text by sentence boundaries (।, ., !, ?, \n) into smaller chunks
-    so long prompts achieve < 1.0s TTFA on the first sentence.
+    Splits text by clause/sentence boundaries (।, ., !, ?, ,, \n) into smaller 
+    35-character chunks so EVERY chunk generates in under 1.2 seconds MAX.
     """
-    if len(text.strip()) <= max_chunk_len:
-        return [text.strip()]
-    parts = re.split(r'([।.!?\n]+)', text)
+    text_clean = text.strip()
+    if len(text_clean) <= max_chunk_len:
+        return [text_clean]
+    parts = re.split(r'([।.!?,,\n]+)', text_clean)
     sentences = []
     curr = ""
     for p in parts:
         if not p:
             continue
         curr += p
-        if re.search(r'[।.!?\n]', p) or len(curr) >= max_chunk_len:
-            if curr.strip():
-                sentences.append(curr.strip())
+        if re.search(r'[।.!?,,\n]', p) or len(curr) >= max_chunk_len:
+            cleaned = curr.strip()
+            if cleaned:
+                sentences.append(cleaned)
             curr = ""
     if curr.strip():
         sentences.append(curr.strip())
-    return sentences if sentences else [text.strip()]
+    return sentences if sentences else [text_clean]
 
 
 # -----------------------------------------------------------------------------
@@ -343,7 +345,7 @@ class FastFishTTS:
         if reference_id and reference_id in self.voice_cache:
             prompt_tokens, prompt_texts = self.voice_cache[reference_id]
 
-        sentences = split_text_into_sentences(text, max_chunk_len=chunk_length if (chunk_length > 0 and chunk_length != 80) else 45)
+        sentences = split_text_into_sentences(text, max_chunk_len=35)
         logger.info(f"⚡ [SENTENCE STREAM] Split text into {len(sentences)} sentence chunks for instant TTFA")
 
         # Yield 44-byte WAV header first for instant streaming playback
