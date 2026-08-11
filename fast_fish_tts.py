@@ -220,7 +220,16 @@ class FastFishTTS:
         # In-Memory Voice Prompt Cache: { voice_id: (prompt_tokens_list, prompt_texts_list) }
         self.voice_cache: Dict[str, Tuple[List[torch.Tensor], List[str]]] = {}
 
-        logger.info("🎉 FastFishTTS Engine v3.0.0 loaded successfully into GPU memory!")
+        if self.compile_model:
+            logger.info("🔥 Running startup CUDA warmup compilation pass on GPU (pre-warming BEFORE HTTP server opens)...")
+            try:
+                for _ in self.generate_stream("warmup", max_new_tokens=10):
+                    pass
+                logger.info("✅ Startup CUDA compilation warmup complete!")
+            except Exception as w_err:
+                logger.warning(f"Startup warmup note: {w_err}")
+
+        logger.info("🎉 FastFishTTS Engine v3.1.0-dev loaded successfully into GPU memory!")
 
     def register_reference_voice(
         self,
