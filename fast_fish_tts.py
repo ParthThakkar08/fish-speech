@@ -285,21 +285,44 @@ class FastFishTTS:
 
         raise TypeError(f"Decoder of type '{type(self.decoder).__name__}' has no compatible decode method for shape {codes.shape}")
 
+def split_text_into_sentences(text: str, max_chunk_len: int = 80) -> List[str]:
+    """
+    Splits text by sentence boundaries (।, ., !, ?, \\n) into smaller chunks
+    so long prompts achieve < 1.0s TTFA on the first sentence.
+    """
+    if len(text.strip()) <= max_chunk_len:
+        return [text.strip()]
+    parts = re.split(r'([।.!?\n]+)', text)
+    sentences = []
+    curr = ""
+    for p in parts:
+        if not p:
+            continue
+        curr += p
+        if re.search(r'[।.!?\n]', p) or len(curr) >= max_chunk_len:
+            if curr.strip():
+                sentences.append(curr.strip())
+            curr = ""
+    if curr.strip():
+        sentences.append(curr.strip())
+    return sentences if sentences else [text.strip()]
+
+
     @torch.inference_mode()
     def generate_stream(
         self,
         text: str,
         reference_id: Optional[str] = None,
         max_new_tokens: int = 1024,
-        chunk_length: int = 150,
+        chunk_length: int = 80,
         top_p: float = 0.7,
         temperature: float = 0.7,
         repetition_penalty: float = 1.2,
         seed: Optional[int] = None,
     ) -> Generator[bytes, None, None]:
         """
-        Native Streaming Generator: Yields WAV header first, followed by PCM 16-bit audio byte chunks.
-        Time-To-First-Audio (TTFA) < 250ms!
+        Native Sentence-Streaming Generator: Yields WAV header at 0ms, followed by 
+        sentence-by-sentence PCM audio chunks. Sub-1-second TTFA even on long text!
         """
         if seed is not None:
             set_seed(seed)
@@ -308,60 +331,64 @@ class FastFishTTS:
         if reference_id and reference_id in self.voice_cache:
             prompt_tokens, prompt_texts = self.voice_cache[reference_id]
 
-        target_max_tokens = max_new_tokens if (max_new_tokens is not None and max_new_tokens > 0) else 1024
+        sentences = split_text_into_sentences(text, max_chunk_len=chunk_length if chunk_length > 0 else 80)
+        logger.info(f"⚡ [SENTENCE STREAM] Split text into {len(sentences)} sentence chunks for instant TTFA")
 
-        req_dict = dict(
-            device=self.device,
-            max_new_tokens=target_max_tokens,
-            text=text,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
-            temperature=temperature,
-            compile=self.compile_model,
-            iterative_prompt=chunk_length > 0,
-            chunk_length=chunk_length,
-            prompt_tokens=prompt_tokens,
-            prompt_text=prompt_texts,
-        )
-
-        response_queue = import_queue()
-        self.llama_queue.put(GenerateRequest(request=req_dict, response_queue=response_queue))
-
-        # Yield 44-byte WAV header first for instant browser / streaming player compatibility
+        # Yield 44-byte WAV header first for instant streaming playback
         yield wav_chunk_header(sample_rate=self.sample_rate)
 
         feature_len = torch.tensor([0], device=self.device)
 
-        while True:
-            wrapped = response_queue.get()
-            if wrapped.status == "error":
-                logger.error(f"❌ Generation queue error: {wrapped.response}")
-                raise RuntimeError(f"Generation error: {wrapped.response}")
+        for s_idx, sentence_text in enumerate(sentences):
+            # Dynamic max new tokens for each sentence chunk
+            sent_max_tokens = max(64, min(len(sentence_text) * 4, max_new_tokens))
 
-            res = wrapped.response
-            if res.action != "next":
-                codes = res.codes
-                if codes is not None and codes.shape[-1] > 0:
-                    # Guarantee 3D shape (1, num_codebooks, seq_len)
-                    if codes.ndim == 2:
-                        indices = codes[None].to(self.device)
-                    else:
-                        indices = codes.to(self.device)
+            req_dict = dict(
+                device=self.device,
+                max_new_tokens=sent_max_tokens,
+                text=sentence_text,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                temperature=temperature,
+                compile=self.compile_model,
+                iterative_prompt=True,
+                chunk_length=chunk_length,
+                prompt_tokens=prompt_tokens,
+                prompt_text=prompt_texts,
+            )
 
-                    feature_len[0] = indices.shape[-1]
-                    try:
-                        ctx = torch.cuda.amp.autocast(dtype=self.precision) if self.device == "cuda" else nullcontext()
-                        with ctx:
-                            decoded_tensor = self._decode_vq_tokens(indices, feature_len).view(-1)
+            response_queue = import_queue()
+            self.llama_queue.put(GenerateRequest(request=req_dict, response_queue=response_queue))
 
-                        pcm_data = (decoded_tensor.float().cpu().numpy() * AMPLITUDE).astype(np.int16).tobytes()
-                        if len(pcm_data) > 0:
-                            yield pcm_data
-                    except Exception as dec_err:
-                        logger.error(f"❌ Decoder Error: {dec_err}\n{traceback.format_exc()}")
-                        raise dec_err
-            else:
-                break
+            while True:
+                wrapped = response_queue.get()
+                if wrapped.status == "error":
+                    logger.error(f"❌ Generation queue error: {wrapped.response}")
+                    raise RuntimeError(f"Generation error: {wrapped.response}")
+
+                res = wrapped.response
+                if res.action != "next":
+                    codes = res.codes
+                    if codes is not None and codes.shape[-1] > 0:
+                        if codes.ndim == 2:
+                            indices = codes[None].to(self.device)
+                        else:
+                            indices = codes.to(self.device)
+
+                        feature_len[0] = indices.shape[-1]
+                        try:
+                            ctx = torch.cuda.amp.autocast(dtype=self.precision) if self.device == "cuda" else nullcontext()
+                            with ctx:
+                                decoded_tensor = self._decode_vq_tokens(indices, feature_len).view(-1)
+
+                            pcm_data = (decoded_tensor.float().cpu().numpy() * AMPLITUDE).astype(np.int16).tobytes()
+                            if len(pcm_data) > 0:
+                                yield pcm_data
+                        except Exception as dec_err:
+                            logger.error(f"❌ Decoder Error: {dec_err}\n{traceback.format_exc()}")
+                            raise dec_err
+                else:
+                    break
 
     @torch.inference_mode()
     def generate(
