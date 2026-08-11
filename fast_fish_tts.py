@@ -320,29 +320,6 @@ class FastFishTTS:
 
         raise TypeError(f"Decoder of type '{type(self.decoder).__name__}' has no compatible decode method for shape {codes.shape}")
 
-def split_text_into_sentences(text: str, max_chunk_len: int = 80) -> List[str]:
-    """
-    Splits text by sentence boundaries (।, ., !, ?, \\n) into smaller chunks
-    so long prompts achieve < 1.0s TTFA on the first sentence.
-    """
-    if len(text.strip()) <= max_chunk_len:
-        return [text.strip()]
-    parts = re.split(r'([।.!?\n]+)', text)
-    sentences = []
-    curr = ""
-    for p in parts:
-        if not p:
-            continue
-        curr += p
-        if re.search(r'[।.!?\n]', p) or len(curr) >= max_chunk_len:
-            if curr.strip():
-                sentences.append(curr.strip())
-            curr = ""
-    if curr.strip():
-        sentences.append(curr.strip())
-    return sentences if sentences else [text.strip()]
-
-
     @torch.inference_mode()
     def generate_stream(
         self,
