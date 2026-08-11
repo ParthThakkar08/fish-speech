@@ -349,12 +349,10 @@ class FastFishTTS:
         # Yield 44-byte WAV header first for instant streaming playback
         yield wav_chunk_header(sample_rate=self.sample_rate)
 
-        feature_len = torch.tensor([0], device=self.device)
-
+        # ── 1. Dispatch ALL sentence requests to GPU workers CONCURRENTLY ─────
+        sentence_jobs = []
         for s_idx, sentence_text in enumerate(sentences):
-            # Dynamic max new tokens for each sentence chunk
-            sent_max_tokens = max(64, min(len(sentence_text) * 4, max_new_tokens))
-
+            sent_max_tokens = min(max(20, len(sentence_text) * 3), max_new_tokens if max_new_tokens > 0 else 1024)
             req_dict = dict(
                 device=self.device,
                 max_new_tokens=sent_max_tokens,
@@ -368,14 +366,20 @@ class FastFishTTS:
                 prompt_tokens=prompt_tokens,
                 prompt_text=prompt_texts,
             )
+            q = import_queue()
+            self.llama_queue.put(GenerateRequest(request=req_dict, response_queue=q))
+            sentence_jobs.append((s_idx, sentence_text, q))
 
-            response_queue = import_queue()
-            self.llama_queue.put(GenerateRequest(request=req_dict, response_queue=response_queue))
+        logger.info(f"🚀 Dispatched {len(sentence_jobs)} sentence jobs concurrently to GPU workers!")
 
+        # ── 2. Stream audio in strict sentence order as workers finish ──────
+        feature_len = torch.tensor([0], device=self.device)
+
+        for s_idx, sentence_text, response_queue in sentence_jobs:
             while True:
                 wrapped = response_queue.get()
                 if wrapped.status == "error":
-                    logger.error(f"❌ Generation queue error: {wrapped.response}")
+                    logger.error(f"❌ Generation queue error (Sentence {s_idx}): {wrapped.response}")
                     raise RuntimeError(f"Generation error: {wrapped.response}")
 
                 res = wrapped.response
