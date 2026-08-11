@@ -782,9 +782,8 @@ def launch_thread_safe_queue(
                         WrappedGenerateResponse(status="success", response=chunk)
                     )
 
-                # Only clear cache after complete request batch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                # Completed request batch smoothly without CUDA memory barrier pauses
+                pass
 
             except Exception as e:
                 logger.error(traceback.format_exc())

@@ -343,7 +343,7 @@ class FastFishTTS:
         if reference_id and reference_id in self.voice_cache:
             prompt_tokens, prompt_texts = self.voice_cache[reference_id]
 
-        sentences = split_text_into_sentences(text, max_chunk_len=chunk_length if chunk_length > 0 else 80)
+        sentences = split_text_into_sentences(text, max_chunk_len=chunk_length if (chunk_length > 0 and chunk_length != 80) else 45)
         logger.info(f"⚡ [SENTENCE STREAM] Split text into {len(sentences)} sentence chunks for instant TTFA")
 
         # Yield 44-byte WAV header first for instant streaming playback
@@ -352,7 +352,7 @@ class FastFishTTS:
         # ── 1. Dispatch ALL sentence requests to GPU workers CONCURRENTLY ─────
         sentence_jobs = []
         for s_idx, sentence_text in enumerate(sentences):
-            sent_max_tokens = min(max(20, len(sentence_text) * 3), max_new_tokens if max_new_tokens > 0 else 1024)
+            sent_max_tokens = min(max(16, int(len(sentence_text) * 2.2)), max_new_tokens if (max_new_tokens > 0 and max_new_tokens != 1024) else 256)
             req_dict = dict(
                 device=self.device,
                 max_new_tokens=sent_max_tokens,
