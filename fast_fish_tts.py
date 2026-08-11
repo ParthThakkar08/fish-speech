@@ -428,8 +428,8 @@ def import_queue():
 # -----------------------------------------------------------------------------
 app = FastAPI(
     title="FastFishTTS Native Server",
-    version="3.0.0",
-    description="Clean, native, low-latency Fish Speech S2-Pro API Server.",
+    version="3.1.0-dev",
+    description="Clean, native, low-latency Fish Speech S2-Pro API Server (Sentence Chunking Enabled).",
 )
 
 app.add_middleware(
@@ -465,7 +465,7 @@ class TTSRequestModel(BaseModel):
     reference_id: Optional[str] = Field(None, description="Pre-cached voice ID (from /v1/voices/register)")
     references: Optional[List[ReferenceAudioModel]] = Field(None, description="Inline audio reference (only needed if reference_id not yet cached)")
     max_new_tokens: int = Field(1024)
-    chunk_length: int = Field(100)
+    chunk_length: int = Field(80)
     streaming: bool = Field(True)
     format: str = Field("wav")
     top_p: float = Field(0.7)
@@ -477,7 +477,7 @@ class TTSRequestModel(BaseModel):
 @app.get("/v1/health")
 @app.post("/v1/health")
 async def health():
-    return {"status": "ok", "engine": "FastFishTTS Native v3.0.0"}
+    return {"status": "ok", "engine": "FastFishTTS Native v3.1.0-dev (Sentence Chunking)"}
 
 
 @app.get("/v1/voices")
