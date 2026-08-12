@@ -648,29 +648,9 @@ def generate_long(
                 )
             )
 
-            logger.info("Visualizing prompt structure:")
-            conversation_gen.visualize(
-                tokenizer,
-                merge_audio_tokens=True,
-                merge_semantic_tokens=True,
-            )
-
             encoded, audio_masks, audio_parts = conversation_gen.encode_for_inference(
                 tokenizer, num_codebooks=model.config.num_codebooks
             )
-
-            logger.info(f"Encoded prompt shape: {encoded.shape}")
-            if audio_parts is not None:
-                logger.info(f"Audio parts shape: {audio_parts.shape}")
-            if audio_masks is not None:
-                logger.info(
-                    f"Audio masks non-zero count: {torch.count_nonzero(audio_masks)}"
-                )
-
-            if encoded.size(1) > max_length - 2048:
-                raise ValueError(
-                    f"Prompt is too long: {encoded.size(1)} > {max_length - 2048}"
-                )
 
             encoded = encoded.to(device=device)
             prompt_length = encoded.size(1)
@@ -685,23 +665,6 @@ def generate_long(
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
-            )
-
-            if sample_idx == 0 and batch_idx == 0 and compile:
-                logger.info(f"Compilation time: {time.perf_counter() - t0:.2f} seconds")
-
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-
-            t_batch = time.perf_counter() - t0
-            tokens_generated = y.size(1) - prompt_length
-            tokens_sec = tokens_generated / t_batch if t_batch > 0 else 0
-            logger.info(
-                f"Batch {batch_idx}: Generated {tokens_generated} tokens in "
-                f"{t_batch:.02f} seconds, {tokens_sec:.02f} tokens/sec"
-            )
-            logger.info(
-                f"Bandwidth achieved: {model_size * tokens_sec / 1e9:.02f} GB/s"
             )
 
             # Extract generated codes
