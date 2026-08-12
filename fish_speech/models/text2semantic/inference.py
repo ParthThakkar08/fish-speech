@@ -715,20 +715,19 @@ def launch_thread_safe_queue(
     compile: bool = False,
 ):
     input_queue = queue.Queue()
-    init_event = threading.Event()
+
+    logger.info(f"⚡ Loading SINGLE shared Llama DualAR Model into VRAM ({device})...")
+    model, decode_one_token = init_model(
+        checkpoint_path, device, precision, compile=compile
+    )
+    with torch.device(device):
+        model.setup_caches(
+            max_batch_size=1,
+            max_seq_len=model.config.max_seq_len,
+            dtype=next(model.parameters()).dtype,
+        )
 
     def worker():
-        model, decode_one_token = init_model(
-            checkpoint_path, device, precision, compile=compile
-        )
-        with torch.device(device):
-            model.setup_caches(
-                max_batch_size=1,
-                max_seq_len=model.config.max_seq_len,
-                dtype=next(model.parameters()).dtype,
-            )
-        init_event.set()
-
         while True:
             item: GenerateRequest | None = input_queue.get()
             if item is None:
@@ -744,23 +743,15 @@ def launch_thread_safe_queue(
                     response_queue.put(
                         WrappedGenerateResponse(status="success", response=chunk)
                     )
-
-                # Completed request batch smoothly without CUDA memory barrier pauses
-                pass
-
             except Exception as e:
                 logger.error(traceback.format_exc())
                 response_queue.put(WrappedGenerateResponse(status="error", response=e))
-                # Clear cache on error
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
 
     num_workers = int(os.getenv("NUM_WORKERS", "4"))
-    logger.info(f"⚡ Spawning {num_workers} parallel GPU worker threads for concurrent sentence synthesis...")
+    logger.info(f"⚡ Spawning {num_workers} worker threads sharing single GPU model...")
     for w_idx in range(num_workers):
         t = threading.Thread(target=worker, daemon=True, name=f"llama_worker_{w_idx}")
         t.start()
-    init_event.wait()
 
     return input_queue
 
