@@ -792,7 +792,11 @@ def launch_thread_safe_queue(
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-    threading.Thread(target=worker, daemon=True).start()
+    num_workers = int(os.getenv("NUM_WORKERS", "4"))
+    logger.info(f"⚡ Spawning {num_workers} parallel GPU worker threads for concurrent sentence synthesis...")
+    for w_idx in range(num_workers):
+        t = threading.Thread(target=worker, daemon=True, name=f"llama_worker_{w_idx}")
+        t.start()
     init_event.wait()
 
     return input_queue
